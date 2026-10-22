@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 
 const auth = require('../middleware/auth.middleware');
+const upload = require('../middleware/upload');
 const { checkPermisos, checkAlgunPermiso } = require('../middleware/permission.middleware');
 const ctrl = require('../controllers/incidencias.controller');
 
@@ -95,6 +96,7 @@ router.patch('/:id/reabrir',
 router.post('/:id/evidencias',
   auth,
   checkAlgunPermiso('evidencias:subir'),
+  upload.single('archivo'),   // <-- campo del form-data se llama "archivo"
   ctrl.agregarEvidencia
 );
 

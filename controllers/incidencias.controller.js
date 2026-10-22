@@ -384,42 +384,78 @@ exports.gestionarTags = async (req, res) => {
 /* -------------------------------------------------------------
  * POST /api/incidencias/:id/evidencias  (reportante + técnico)
  * ------------------------------------------------------------- */
+const supabase = require('../config/supabase');
+
 exports.agregarEvidencia = async (req, res) => {
   try {
-    const { nombre_archivo, tipo_mime, peso_kb, url_storage } = req.body;
-    if (!url_storage) return res.status(400).json({ message: 'url_storage es obligatorio' });
+    // 1. Verificar que venga el archivo
+    if (!req.file) {
+      return res.status(400).json({ message: 'No se recibió ningún archivo' });
+    }
 
     const incidencia = await Incidencia.findById(req.params.id);
-    if (!incidencia) return res.status(404).json({ message: 'No encontrada' });
+    if (!incidencia) {
+      return res.status(404).json({ message: 'Incidencia no encontrada' });
+    }
 
-    // Reportante solo agrega evidencias a sus propias incidencias
+    // 2. Validar permisos según rol (igual que antes)
     if (req.user.rol === 'reportante' &&
         incidencia.reportante.usuario_id.toString() !== req.user.sub) {
       return res.status(403).json({ message: 'No puede adjuntar evidencias a esta incidencia' });
     }
-    // Técnico solo a las asignadas
     if (req.user.rol === 'tecnico_soporte' &&
         incidencia.tecnico_asignado?.usuario_id?.toString() !== req.user.sub) {
       return res.status(403).json({ message: 'No puede adjuntar evidencias a esta incidencia' });
     }
 
+    // 3. Generar nombre único para el archivo
+    const timestamp = Date.now();
+    const nombreSeguro = req.file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const pathStorage = `incidencias/${incidencia._id}/${timestamp}-${nombreSeguro}`;
+
+    // 4. Subir a Supabase Storage
+    const { data: uploadData, error: uploadError } = await supabase.storage
+      .from(process.env.SUPABASE_BUCKET)
+      .upload(pathStorage, req.file.buffer, {
+        contentType: req.file.mimetype,
+        upsert: false
+      });
+
+    if (uploadError) {
+      console.error('Error Supabase:', uploadError);
+      return res.status(500).json({ message: 'Error al subir archivo a Supabase', detalle: uploadError.message });
+    }
+
+    // 5. Obtener URL pública (requiere bucket público)
+    const { data: urlData } = supabase.storage
+      .from(process.env.SUPABASE_BUCKET)
+      .getPublicUrl(pathStorage);
+
+    const urlPublica = urlData.publicUrl;
+
+    // 6. Guardar metadata en MongoDB (mismo esquema que ya tienes)
     incidencia.evidencias_adjuntas.push({
-      nombre_archivo,
-      tipo_mime,
-      peso_kb,
-      url_storage,
+      nombre_archivo: req.file.originalname,
+      tipo_mime: req.file.mimetype,
+      peso_kb: Math.round(req.file.size / 1024),
+      url_storage: urlPublica,
       fecha_carga: new Date()
     });
 
     registrarHistorial(
       incidencia, req.user, 'documentacion', incidencia.estado,
-      `Se adjuntó evidencia: ${nombre_archivo || url_storage}`
+      `Se adjuntó evidencia: ${req.file.originalname}`
     );
+
     await incidencia.save();
-    return res.json({ message: 'Evidencia agregada', evidencias: incidencia.evidencias_adjuntas });
+
+    return res.json({
+      message: 'Evidencia agregada',
+      evidencia: incidencia.evidencias_adjuntas[incidencia.evidencias_adjuntas.length - 1]
+    });
   } catch (error) {
     console.error(error);
-    return res.status(500).json({ message: 'Error al agregar evidencia' });
+    return res.status(500).json({ message: 'Error al agregar evidencia', detalle: error.message });
   }
 };
 
