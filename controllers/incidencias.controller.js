@@ -1,5 +1,6 @@
 const Incidencia = require('../models/Incidencia');
 const Usuario = require('../models/Usuario');
+const supabase = require('../db/supabase');
 const { generarCodigo } = require('../utils/codigoIncidencia');
 
 /* -------------------------------------------------------------
@@ -384,7 +385,6 @@ exports.gestionarTags = async (req, res) => {
 /* -------------------------------------------------------------
  * POST /api/incidencias/:id/evidencias  (reportante + técnico)
  * ------------------------------------------------------------- */
-const supabase = require('../config/supabase');
 
 exports.agregarEvidencia = async (req, res) => {
   try {
