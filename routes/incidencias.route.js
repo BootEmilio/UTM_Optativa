@@ -74,10 +74,10 @@ router.patch('/:id/prioridad',
   ctrl.establecerPrioridad
 );
 
-router.patch('/:id/tags',
+router.post('/:id/tags',
   auth,
   checkPermisos('etiquetas:gestionar'),
-  ctrl.gestionarTags
+  ctrl.agregarTag
 );
 
 router.delete('/:id/tags/:tag',
