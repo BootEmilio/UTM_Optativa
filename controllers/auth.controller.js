@@ -57,10 +57,18 @@ exports.login = async (req, res) => {
 };
 
 exports.perfil = async (req, res) => {
-  // req.user viene del middleware auth
-  const usuario = await Usuario.findById(req.user.sub).select('-password_hash');
+  const usuario = await Usuario.findById(req.user.sub).select('-password_hash').lean();
   if (!usuario) return res.status(404).json({ message: 'Usuario no encontrado' });
+  const rol = await Rol.findOne({ clave: usuario.rol }).lean();
 
-  const rol = await Rol.findOne({ clave: usuario.rol });
-  return res.json({ usuario, rol });
+  return res.json({
+    _id: usuario._id,
+    nombre: usuario.nombre,
+    apellidos: usuario.apellidos,
+    correo: usuario.correo,
+    rol: usuario.rol,
+    area: usuario.area || null,
+    activo: usuario.activo,
+    permisos: rol ? rol.permisos : (req.user.permisos || [])
+  });
 };

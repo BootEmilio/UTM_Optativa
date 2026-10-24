@@ -80,6 +80,12 @@ router.patch('/:id/tags',
   ctrl.gestionarTags
 );
 
+router.delete('/:id/tags/:tag',
+  auth,
+  checkPermisos('etiquetas:gestionar'),
+  ctrl.eliminarTag
+);
+
 router.patch('/:id/cerrar',
   auth,
   checkPermisos('incidencias:cerrar'),
@@ -90,6 +96,24 @@ router.patch('/:id/reabrir',
   auth,
   checkPermisos('incidencias:reabrir'),
   ctrl.reabrirIncidencia
+);
+
+router.get('/tecnicos',
+  auth,
+  checkAlgunPermiso('incidencias:asignar_tecnico', 'incidencias:reasignar_tecnico'),
+  ctrl.listarTecnicos
+);
+
+router.get('/metricas',
+  auth,
+  checkAlgunPermiso('incidencias:ver_area', 'incidencias:supervisar_avances'),
+  ctrl.obtenerMetricas
+);
+
+router.get('/actividad',
+  auth,
+  checkAlgunPermiso('incidencias:supervisar_avances'),
+  ctrl.obtenerActividadReciente
 );
 
 // ================== COMUNES ==================

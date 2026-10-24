@@ -108,16 +108,31 @@ exports.listarIncidencias = async (req, res) => {
 
     // filtros opcionales por query
     const { estado, categoria, prioridad, edificio } = req.query;
+    const page  = Math.max(Number(req.query.page)  || 1, 1);
+    const limit = Math.min(Number(req.query.limit) || 20, 100);
     if (estado) filtro.estado = estado;
     if (categoria) filtro.categoria = categoria;
     if (prioridad) filtro.prioridad = prioridad;
     if (edificio) filtro['ubicacion.edificio'] = edificio;
+    if (busqueda) {
+      const rx = new RegExp(busqueda, 'i');
+      filtro.$or = [
+        { titulo: rx },
+        { descripcion: rx },
+        { codigo: rx }
+      ];
+    }
+    const [items, total] = await Promise.all([
+      Incidencia.find(filtro)
+        .sort({ fecha_creacion: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .lean(),
+      Incidencia.countDocuments(filtro)
+    ]);
 
-    const incidencias = await Incidencia.find(filtro)
-      .sort({ fecha_creacion: -1 })
-      .lean();
-
-    return res.json({ total: incidencias.length, incidencias });
+    // alias "incidencias" para no romper otros consumidores
+    return res.json({ items, incidencias: items, total, page, limit });
   } catch (error) {
     console.error(error);
     return res.status(500).json({ message: 'Error al listar incidencias' });
@@ -355,30 +370,54 @@ exports.establecerPrioridad = async (req, res) => {
   }
 };
 
-/* -------------------------------------------------------------
- * PATCH /api/incidencias/:id/tags  (coordinador)
- * ------------------------------------------------------------- */
-exports.gestionarTags = async (req, res) => {
+/* POST /api/incidencias/:id/tags   body: { tag } */
+exports.agregarTag = async (req, res) => {
   try {
-    const { tags, comentario } = req.body;
-    if (!Array.isArray(tags)) {
-      return res.status(400).json({ message: 'tags debe ser un arreglo' });
+    const { tag } = req.body;
+    if (!tag || !String(tag).trim()) {
+      return res.status(400).json({ message: 'tag es obligatorio' });
     }
+    const normalizado = String(tag).trim().toLowerCase();
 
     const incidencia = await Incidencia.findById(req.params.id);
     if (!incidencia) return res.status(404).json({ message: 'No encontrada' });
 
-    incidencia.tags = tags;
+    if (!incidencia.tags.includes(normalizado)) {
+      incidencia.tags.push(normalizado);
+      registrarHistorial(
+        incidencia, req.user, 'etiquetas', incidencia.estado,
+        `Etiqueta agregada: ${normalizado}`
+      );
+      await incidencia.save();
+    }
+
+    return res.json({ message: 'Etiqueta agregada', incidencia });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ message: 'Error al agregar etiqueta' });
+  }
+};
+
+/* DELETE /api/incidencias/:id/tags/:tag */
+exports.eliminarTag = async (req, res) => {
+  try {
+    const normalizado = decodeURIComponent(req.params.tag).trim().toLowerCase();
+
+    const incidencia = await Incidencia.findById(req.params.id);
+    if (!incidencia) return res.status(404).json({ message: 'No encontrada' });
+
+    incidencia.tags = incidencia.tags.filter((t) => t !== normalizado);
 
     registrarHistorial(
       incidencia, req.user, 'etiquetas', incidencia.estado,
-      comentario || 'Etiquetas actualizadas.'
+      `Etiqueta eliminada: ${normalizado}`
     );
     await incidencia.save();
-    return res.json({ message: 'Etiquetas actualizadas', tags: incidencia.tags });
+
+    return res.json({ message: 'Etiqueta eliminada', incidencia });
   } catch (error) {
     console.error(error);
-    return res.status(500).json({ message: 'Error al actualizar etiquetas' });
+    return res.status(500).json({ message: 'Error al eliminar etiqueta' });
   }
 };
 
@@ -541,5 +580,97 @@ exports.reabrirIncidencia = async (req, res) => {
   } catch (error) {
     console.error(error);
     return res.status(500).json({ message: 'Error al reabrir incidencia' });
+  }
+  
+};
+
+/* GET /api/coordinador/tecnicos */
+exports.listarTecnicos = async (req, res) => {
+  try {
+    const tecnicos = await Usuario.find({ rol: 'tecnico_soporte', activo: true })
+      .select('_id nombre apellidos correo especialidad activo')
+      .lean();
+
+    const ids = tecnicos.map((t) => t._id);
+
+    const conteos = await Incidencia.aggregate([
+      {
+        $match: {
+          'tecnico_asignado.usuario_id': { $in: ids },
+          estado: { $in: ['abierta', 'en_proceso', 'reabierta'] }
+        }
+      },
+      { $group: { _id: '$tecnico_asignado.usuario_id', total: { $sum: 1 } } }
+    ]);
+
+    const mapa = conteos.reduce((acc, c) => {
+      acc[c._id.toString()] = c.total;
+      return acc;
+    }, {});
+
+    const data = tecnicos.map((t) => ({
+      _id: t._id,
+      nombre: `${t.nombre} ${t.apellidos}`,
+      correo: t.correo,
+      especialidad: t.especialidad || null,
+      activo: t.activo,
+      incidencias_activas: mapa[t._id.toString()] || 0
+    }));
+
+    return res.json(data);
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ message: 'Error al listar técnicos' });
+  }
+};
+
+/* GET /api/coordinador/metricas */
+exports.obtenerMetricas = async (req, res) => {
+  try {
+    const [pendientesAsignar, enProceso, resueltasAuditar, cerradas, total] =
+      await Promise.all([
+        Incidencia.countDocuments({ estado: 'abierta', 'tecnico_asignado.usuario_id': null }),
+        Incidencia.countDocuments({ estado: 'en_proceso' }),
+        Incidencia.countDocuments({ estado: 'resuelta' }),
+        Incidencia.countDocuments({ estado: 'cerrada' }),
+        Incidencia.countDocuments({})
+      ]);
+
+    return res.json({ pendientesAsignar, enProceso, resueltasAuditar, cerradas, total });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ message: 'Error al obtener métricas' });
+  }
+};
+
+/* GET /api/coordinador/actividad?limite=5 */
+exports.obtenerActividadReciente = async (req, res) => {
+  try {
+    const limite = Math.min(Number(req.query.limite) || 5, 50);
+
+    const eventos = await Incidencia.aggregate([
+      { $unwind: '$historial_seguimiento' },
+      { $sort: { 'historial_seguimiento.fecha': -1 } },
+      { $limit: limite },
+      {
+        $project: {
+          _id: 0,
+          incidencia_id: '$_id',
+          codigo: '$codigo',
+          titulo: '$titulo',
+          fecha: '$historial_seguimiento.fecha',
+          usuario_id: '$historial_seguimiento.usuario_id',
+          autor: '$historial_seguimiento.autor',
+          accion: '$historial_seguimiento.accion',
+          estado_nuevo: '$historial_seguimiento.estado_nuevo',
+          comentario: '$historial_seguimiento.comentario'
+        }
+      }
+    ]);
+
+    return res.json(eventos);
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ message: 'Error al obtener actividad' });
   }
 };
