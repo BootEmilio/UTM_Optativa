@@ -107,13 +107,16 @@ exports.listarIncidencias = async (req, res) => {
     const filtro = construirFiltroPorRol(req.user);
 
     // filtros opcionales por query
-    const { estado, categoria, prioridad, edificio } = req.query;
+    const { estado, categoria, prioridad, edificio, busqueda } = req.query;
+
     const page  = Math.max(Number(req.query.page)  || 1, 1);
     const limit = Math.min(Number(req.query.limit) || 20, 100);
+
     if (estado) filtro.estado = estado;
     if (categoria) filtro.categoria = categoria;
     if (prioridad) filtro.prioridad = prioridad;
     if (edificio) filtro['ubicacion.edificio'] = edificio;
+    
     if (busqueda) {
       const rx = new RegExp(busqueda, 'i');
       filtro.$or = [
