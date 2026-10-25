@@ -571,7 +571,7 @@ exports.reabrirIncidencia = async (req, res) => {
     const incidencia = await Incidencia.findById(req.params.id);
     if (!incidencia) return res.status(404).json({ message: 'No encontrada' });
 
-    incidencia.estado = 'reabierta';
+    incidencia.estado = 'abierta';
     incidencia.fecha_resolucion = null;
 
     registrarHistorial(
