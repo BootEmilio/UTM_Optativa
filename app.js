@@ -4,6 +4,7 @@ const express = require('express');
 const mongoose = require('mongoose');
 const authRoutes = require('./routes/auth.route');
 const incidenciaRoutes = require('./routes/incidencias.route');
+const coordinadorRoutes = require('./routes/coordinador.route');
 
 const app = express();
 app.use(express.json());
@@ -31,7 +32,8 @@ app.use(cors({
 }));
 
 app.use('/api/auth', authRoutes);
-app.use('/api/incidencias', require('./routes/incidencias.route'));
+app.use('/api/incidencias',  incidenciaRoutes);
+app.use('/api/coordinador', coordinadorRoutes);
 // app.use('/api/incidencias', require('./routes/incidencias.routes'));
 
 mongoose.connect(process.env.MONGO_URI)

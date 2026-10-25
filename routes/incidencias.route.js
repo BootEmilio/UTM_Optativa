@@ -98,24 +98,6 @@ router.patch('/:id/reabrir',
   ctrl.reabrirIncidencia
 );
 
-router.get('/tecnicos',
-  auth,
-  checkAlgunPermiso('incidencias:asignar_tecnico', 'incidencias:reasignar_tecnico'),
-  ctrl.listarTecnicos
-);
-
-router.get('/metricas',
-  auth,
-  checkAlgunPermiso('incidencias:ver_area', 'incidencias:supervisar_avances'),
-  ctrl.obtenerMetricas
-);
-
-router.get('/actividad',
-  auth,
-  checkAlgunPermiso('incidencias:supervisar_avances'),
-  ctrl.obtenerActividadReciente
-);
-
 // ================== COMUNES ==================
 router.post('/:id/evidencias',
   auth,
