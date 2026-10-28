@@ -66,7 +66,7 @@ exports.crearIncidencia = async (req, res) => {
       reportante: {
         usuario_id: usuario._id,
         nombre: `${usuario.nombre} ${usuario.apellidos}`,
-        tipo: usuario.tipo_reportante || 'estudiante'
+        tipo: usuario.tipo_reportante || 'estudiante', 'administrador_sistema': usuario.rol === 'administrador_sistema' ? true : false
       },
       tecnico_asignado: { usuario_id: null, nombre: null },
       ubicacion: ubicacion || {},
@@ -89,8 +89,12 @@ exports.crearIncidencia = async (req, res) => {
     await incidencia.save();
     return res.status(201).json({ message: 'Incidencia creada', incidencia });
   } catch (error) {
-    console.error(error);
-    return res.status(500).json({ message: 'Error al crear la incidencia', error: error.message });
+    console.dir(error.errInfo, { depth: null });
+
+  return res.status(500).json({
+    message: "Error al crear la incidencia",
+    error: error.message
+  });
   }
 };
 
