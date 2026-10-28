@@ -433,7 +433,7 @@ exports.eliminarTag = async (req, res) => {
  * ------------------------------------------------------------- */
 
 exports.agregarEvidencia = async (req, res) => {
-  try {
+    try {
     // 1. Verificar que venga el archivo
     if (!req.file) {
       return res.status(400).json({ message: 'No se recibió ningún archivo' });
@@ -444,14 +444,21 @@ exports.agregarEvidencia = async (req, res) => {
       return res.status(404).json({ message: 'Incidencia no encontrada' });
     }
 
-    // 2. Validar permisos según rol (igual que antes)
-    if (req.user.rol === 'reportante' &&
-        incidencia.reportante.usuario_id.toString() !== req.user.sub) {
-      return res.status(403).json({ message: 'No puede adjuntar evidencias a esta incidencia' });
-    }
-    if (req.user.rol === 'tecnico_soporte' &&
-        incidencia.tecnico_asignado?.usuario_id?.toString() !== req.user.sub) {
-      return res.status(403).json({ message: 'No puede adjuntar evidencias a esta incidencia' });
+    const esReportanteDueno =
+      req.user.rol === 'reportante' &&
+      incidencia.reportante.usuario_id.toString() === req.user.sub;
+
+    const esTecnicoAsignado =
+      req.user.rol === 'tecnico_soporte' &&
+      incidencia.tecnico_asignado?.usuario_id?.toString() === req.user.sub;
+
+    const esAdmin = req.user.rol === 'administrador_sistema';
+    const esCoordinador = req.user.rol === 'coordinador_soporte'; // opcional
+
+    if (!esReportanteDueno && !esTecnicoAsignado && !esAdmin && !esCoordinador) {
+      return res.status(403).json({
+        message: 'No puede adjuntar evidencias a esta incidencia'
+      });
     }
 
     // 3. Generar nombre único para el archivo
@@ -477,8 +484,10 @@ exports.agregarEvidencia = async (req, res) => {
       .from(process.env.SUPABASE_BUCKET)
       .getPublicUrl(pathStorage);
 
-    const urlPublica = urlData.publicUrl;
+      console.log('🔗 urlData:', urlData);   // 👈 TEMPORAL
+      console.log('🔗 publicUrl:', urlData?.publicUrl); 
 
+    const urlPublica = urlData.publicUrl;
     // 6. Guardar metadata en MongoDB (mismo esquema que ya tienes)
     incidencia.evidencias_adjuntas.push({
       nombre_archivo: req.file.originalname,
