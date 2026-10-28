@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const Incidencia = require('../models/Incidencia');
 const Usuario = require('../models/Usuario');
 const supabase = require('../db/supabase');
@@ -20,62 +21,84 @@ const construirFiltroPorRol = (user) => {
 };
 
 const registrarHistorial = (incidencia, user, accion, estado_nuevo, comentario, horas = null) => {
-  incidencia.historial_seguimiento.push({
+  const entry = {
     fecha: new Date(),
-    usuario_id: user.sub,
+    usuario_id: new mongoose.Types.ObjectId(user.sub),
     autor: user.nombre,
     accion,
     estado_nuevo,
-    comentario,
-    horas
-  });
-};
+    comentario
+  };
 
+  if (horas !== null && horas !== undefined) {
+    entry.horas = Number(horas);
+  }
+
+  incidencia.historial_seguimiento.push(entry);
+};
 /* -------------------------------------------------------------
  * POST /api/incidencias  → reportante:crear
  * ------------------------------------------------------------- */
 exports.crearIncidencia = async (req, res) => {
   try {
     const {
-      titulo,
-      descripcion,
-      categoria,
-      ubicacion,
-      detalle_especifico,
-      tags,
-      evidencias_adjuntas
+      titulo, descripcion, categoria,
+      ubicacion, detalle_especifico, tags, evidencias_adjuntas
     } = req.body;
 
     if (!titulo || !categoria) {
       return res.status(400).json({ message: 'titulo y categoria son obligatorios' });
     }
 
-    // Validar que el rol esté entre los que pueden reportar
+    const enumsPorCategoria = {
+      computo_redes: ['conectividad','falla_equipo','falla_red','internet','software','hardware','otro'],
+      infraestructura: ['filtracion','electricidad','mobiliario','aire_acondicionado','iluminacion','danio_estructural','otro'],
+      academico: ['plataforma_digital','inscripcion','calificaciones','horarios','servicios_escolares','otro']
+    };
+    if (!enumsPorCategoria[categoria]) {
+      return res.status(400).json({ message: 'categoria inválida' });
+    }
+    if (!enumsPorCategoria[categoria].includes(detalle_especifico?.tipo_incidencia)) {
+      return res.status(400).json({
+        message: `tipo_incidencia inválido para ${categoria}`,
+        permitidos: enumsPorCategoria[categoria]
+      });
+    }
+
     const usuario = await Usuario.findById(req.user.sub).lean();
     if (!usuario) return res.status(404).json({ message: 'Usuario no encontrado' });
 
+    const tipoReportante = ['docente','estudiante','administrativo'].includes(usuario.tipo_reportante)
+      ? usuario.tipo_reportante
+      : 'estudiante';
+
     const codigo = await generarCodigo();
+    console.log('tipo_reportante del usuario:', usuario.tipo_reportante);
+    console.log('tipo final:', tipoReportante);
 
     const incidencia = new Incidencia({
       codigo,
       titulo,
       descripcion,
       categoria,
-      prioridad: 'media', // default; coordinador puede ajustarla después
+      prioridad: 'media',
       estado: 'abierta',
       reportante: {
         usuario_id: usuario._id,
         nombre: `${usuario.nombre} ${usuario.apellidos}`,
-        tipo: usuario.tipo_reportante || 'estudiante', 'administrador_sistema': usuario.rol === 'administrador_sistema' ? true : false
+        tipo: tipoReportante
       },
-      tecnico_asignado: { usuario_id: null, nombre: null },
+      // tecnico_asignado: OMITIDO (opcional)
       ubicacion: ubicacion || {},
       detalle_especifico: detalle_especifico || {},
       tags: tags || [],
-      evidencias_adjuntas: evidencias_adjuntas || [],
+      evidencias_adjuntas: (evidencias_adjuntas || []).map(e => ({
+        ...e,
+        fecha_carga: e.fecha_carga ? new Date(e.fecha_carga) : new Date()
+      })),
       horas_invertidas: 0,
-      fecha_creacion: new Date(),
-      fecha_resolucion: null
+      fecha_creacion: new Date()
+      // fecha_resolucion: OMITIDO (solo para resuelta/cerrada)
     });
 
     registrarHistorial(
@@ -90,14 +113,12 @@ exports.crearIncidencia = async (req, res) => {
     return res.status(201).json({ message: 'Incidencia creada', incidencia });
   } catch (error) {
     console.dir(error.errInfo, { depth: null });
-
-  return res.status(500).json({
-    message: "Error al crear la incidencia",
-    error: error.message
-  });
+    return res.status(500).json({
+      message: 'Error al crear la incidencia',
+      error: error.message
+    });
   }
 };
-
 /* -------------------------------------------------------------
  * GET /api/incidencias  → adapta según rol
  *  - reportante  → ver_propias
