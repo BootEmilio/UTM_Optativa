@@ -1,4 +1,5 @@
 const jwt = require('jsonwebtoken');
+const bcrypt = require("bcrypt");
 const Usuario = require('../models/Usuario');
 const Rol = require('../models/Rol');
 
@@ -11,20 +12,32 @@ exports.login = async (req, res) => {
     }
 
     const usuario = await Usuario.findOne({ correo });
+
     if (!usuario || !usuario.activo) {
-      return res.status(401).json({ message: 'Credenciales inválidas' });
+      return res.status(401).json({
+        message: "Credenciales inválidas"
+      });
     }
+    const passwordOk = await bcrypt.compare(
+      password,
+      usuario.password_hash
+    );
 
-    // NOTA: en tu modelo actual password_hash almacena el texto plano.
-    // En producción usa bcrypt: await bcrypt.compare(password, usuario.password_hash)
-    const passwordOk = password === usuario.password_hash;
     if (!passwordOk) {
-      return res.status(401).json({ message: 'Credenciales inválidas' });
+      return res.status(401).json({
+        message: "Credenciales inválidas"
+      });
     }
 
-    const rol = await Rol.findOne({ clave: usuario.rol, activo: true });
+    const rol = await Rol.findOne({
+    clave: usuario.rol,
+    activo: true
+    });
+
     if (!rol) {
-      return res.status(403).json({ message: 'Rol no válido o inactivo' });
+      return res.status(403).json({
+        message: "Rol no válido o inactivo"
+      });
     }
 
     const payload = {

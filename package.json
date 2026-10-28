@@ -21,6 +21,7 @@
   "homepage": "https://github.com/BootEmilio/UTM_Optativa#readme",
   "dependencies": {
     "@supabase/supabase-js": "^2.118.0",
+    "bcrypt": "^6.0.0",
     "cors": "^2.8.6",
     "dotenv": "^18.0.8",
     "express": "^5.3.0",
