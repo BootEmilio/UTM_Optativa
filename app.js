@@ -12,9 +12,8 @@ const app = express();
 app.use(express.json());
 
 const allowedOrigins = [
-  'http://localhost:3000', // Front de tu colaborador en local
-  // Si tu front también está en Render, agrega su URL aquí:
-  // 'https://tu-front.onrender.com'
+  'http://localhost:3000',
+  'https://web-optativa.onrender.com',
 ];
 
 app.use(cors({
