@@ -31,6 +31,8 @@ const registrarHistorial = (incidencia, user, accion, estado_nuevo, comentario, 
   });
 };
 
+const CATEGORIAS_VALIDAS = ["computo_redes", "infraestructura", "academico"];
+
 /* -------------------------------------------------------------
  * POST /api/incidencias  → reportante:crear
  * ------------------------------------------------------------- */
@@ -42,62 +44,113 @@ exports.crearIncidencia = async (req, res) => {
       categoria,
       ubicacion,
       detalle_especifico,
-      tags,
-      evidencias_adjuntas
+      tags
+      // 👈 evidencias_adjuntas se ignora a propósito (Patrón B)
     } = req.body;
 
-    if (!titulo || !categoria) {
-      return res.status(400).json({ message: 'titulo y categoria son obligatorios' });
+    // --- Validaciones explícitas → 400 en vez de 500 ---
+    if (!titulo || !descripcion || !categoria) {
+      return res.status(400).json({
+        message: "titulo, descripcion y categoria son obligatorios"
+      });
     }
 
-    // Validar que el rol esté entre los que pueden reportar
+    if (!CATEGORIAS_VALIDAS.includes(categoria)) {
+      return res.status(400).json({
+        message: `categoria inválida. Valores permitidos: ${CATEGORIAS_VALIDAS.join(", ")}`
+      });
+    }
+
+    if (!ubicacion || typeof ubicacion !== "object" || !ubicacion.edificio) {
+      return res.status(400).json({
+        message: "ubicacion.edificio es obligatorio"
+      });
+    }
+
+    // --- Usuario ---
     const usuario = await Usuario.findById(req.user.sub).lean();
-    if (!usuario) return res.status(404).json({ message: 'Usuario no encontrado' });
+    if (!usuario) {
+      return res.status(404).json({ message: "Usuario no encontrado" });
+    }
 
     const codigo = await generarCodigo();
+    const nombreCompleto = `${usuario.nombre} ${usuario.apellidos}`;
 
+    // --- Construcción del documento ---
     const incidencia = new Incidencia({
       codigo,
       titulo,
       descripcion,
       categoria,
-      prioridad: 'media', // default; coordinador puede ajustarla después
-      estado: 'abierta',
+      prioridad: "media", // default; coordinador puede ajustarla después
+      estado: "abierta",
+
+      // ✅ Alineado al JSON Schema: usuario_id, nombre, tipo
       reportante: {
         usuario_id: usuario._id,
-        nombre: `${usuario.nombre} ${usuario.apellidos}`,
-        tipo: usuario.tipo_reportante || 'estudiante', 'administrador_sistema': usuario.rol === 'administrador_sistema' ? true : false
+        nombre: nombreCompleto,
+        tipo: usuario.tipo_reportante || "estudiante"
       },
+
       tecnico_asignado: { usuario_id: null, nombre: null },
-      ubicacion: ubicacion || {},
+
+      // ✅ Mapeo explícito para no perder piso ni referencia
+      ubicacion: {
+        edificio: ubicacion.edificio,
+        piso: ubicacion.piso || null,
+        aula: ubicacion.aula || null,
+        referencia: ubicacion.referencia || null
+      },
+
       detalle_especifico: detalle_especifico || {},
-      tags: tags || [],
-      evidencias_adjuntas: evidencias_adjuntas || [],
+      tags: Array.isArray(tags) ? tags : [],
+
+      evidencias_adjuntas: [], // 👈 SIEMPRE vacío al crear (Patrón B)
+
       horas_invertidas: 0,
       fecha_creacion: new Date(),
       fecha_resolucion: null
     });
 
+    // --- Historial ---
     registrarHistorial(
       incidencia,
-      req.user,
-      'creacion',
-      'abierta',
-      'Incidencia registrada por el reportante.'
+      { sub: usuario._id, nombre: nombreCompleto }, // 👈 objeto normalizado
+      "creacion",
+      "abierta",
+      "Incidencia registrada por el reportante."
     );
 
     await incidencia.save();
-    return res.status(201).json({ message: 'Incidencia creada', incidencia });
-  } catch (error) {
-    console.dir(error.errInfo, { depth: null });
 
-  return res.status(500).json({
-    message: "Error al crear la incidencia",
-    error: error.message
-  });
+    return res.status(201).json({
+      message: "Incidencia creada",
+      incidencia
+    });
+  } catch (error) {
+    // --- Manejo de errores específicos ---
+    if (error.name === "ValidationError") {
+      return res.status(400).json({
+        message: "Datos inválidos",
+        errores: Object.fromEntries(
+          Object.entries(error.errors).map(([k, v]) => [k, v.message])
+        )
+      });
+    }
+
+    if (error.code === 11000) {
+      return res.status(409).json({
+        message: "Código de incidencia duplicado"
+      });
+    }
+
+    console.error(error);
+    return res.status(500).json({
+      message: "Error al crear la incidencia",
+      error: error.message
+    });
   }
 };
-
 /* -------------------------------------------------------------
  * GET /api/incidencias  → adapta según rol
  *  - reportante  → ver_propias
@@ -432,42 +485,71 @@ exports.eliminarTag = async (req, res) => {
  * POST /api/incidencias/:id/evidencias  (reportante + técnico)
  * ------------------------------------------------------------- */
 
+const MAX_EVIDENCIAS = 10;
+const MAX_SIZE_MB = 10;
+const ALLOWED_MIME = ["image/png", "image/jpeg", "image/webp", "application/pdf"];
+
 exports.agregarEvidencia = async (req, res) => {
-    try {
-    // 1. Verificar que venga el archivo
+  let pathStorage = null; // 👈 fuera del try para poder limpiar en catch
+
+  try {
+    // 1. Verificar archivo
     if (!req.file) {
-      return res.status(400).json({ message: 'No se recibió ningún archivo' });
+      return res.status(400).json({ message: "No se recibió ningún archivo" });
     }
 
-    const incidencia = await Incidencia.findById(req.params.id);
-    if (!incidencia) {
-      return res.status(404).json({ message: 'Incidencia no encontrada' });
+    // 2. Validar MIME y tamaño (defensa en profundidad)
+    if (!ALLOWED_MIME.includes(req.file.mimetype)) {
+      return res.status(400).json({
+        message: `Tipo MIME no permitido: ${req.file.mimetype}`
+      });
     }
-
-    const esReportanteDueno =
-      req.user.rol === 'reportante' &&
-      incidencia.reportante.usuario_id.toString() === req.user.sub;
-
-    const esTecnicoAsignado =
-      req.user.rol === 'tecnico_soporte' &&
-      incidencia.tecnico_asignado?.usuario_id?.toString() === req.user.sub;
-
-    const esAdmin = req.user.rol === 'administrador_sistema';
-    const esCoordinador = req.user.rol === 'coordinador_soporte'; // opcional
-
-    if (!esReportanteDueno && !esTecnicoAsignado && !esAdmin && !esCoordinador) {
-      return res.status(403).json({
-        message: 'No puede adjuntar evidencias a esta incidencia'
+    if (req.file.size > MAX_SIZE_MB * 1024 * 1024) {
+      return res.status(413).json({
+        message: `El archivo excede ${MAX_SIZE_MB} MB`
       });
     }
 
-    // 3. Generar nombre único para el archivo
-    const timestamp = Date.now();
-    const nombreSeguro = req.file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
-    const pathStorage = `incidencias/${incidencia._id}/${timestamp}-${nombreSeguro}`;
+    // 3. Buscar incidencia
+    const incidencia = await Incidencia.findById(req.params.id);
+    if (!incidencia) {
+      return res.status(404).json({ message: "Incidencia no encontrada" });
+    }
 
-    // 4. Subir a Supabase Storage
-    const { data: uploadData, error: uploadError } = await supabase.storage
+    // 4. Permisos (mismos roles que usas en tu sistema)
+    const esReportanteDueno =
+      req.user.rol === "reportante" &&
+      incidencia.reportante.usuario_id?.toString() === req.user.sub;
+
+    const esTecnicoAsignado =
+      req.user.rol === "tecnico_soporte" &&
+      incidencia.tecnico_asignado?.usuario_id?.toString() === req.user.sub;
+
+    const esAdmin = req.user.rol === "administrador_sistema";
+    const esCoordinador = req.user.rol === "coordinador_soporte";
+
+    if (!esReportanteDueno && !esTecnicoAsignado && !esAdmin && !esCoordinador) {
+      return res.status(403).json({
+        message: "No puede adjuntar evidencias a esta incidencia"
+      });
+    }
+
+    // 5. Límite de evidencias (ANTES de subir a Supabase)
+    if (incidencia.evidencias_adjuntas.length >= MAX_EVIDENCIAS) {
+      return res.status(400).json({
+        message: `Máximo ${MAX_EVIDENCIAS} evidencias por incidencia`
+      });
+    }
+
+    // 6. Nombre seguro y path en Supabase
+    const timestamp = Date.now();
+    const nombreSeguro = (req.file.originalname || "archivo")
+      .replace(/[^a-zA-Z0-9._-]/g, "_")
+      .slice(-100);
+    pathStorage = `incidencias/${incidencia._id}/${timestamp}-${nombreSeguro}`;
+
+    // 7. Subir a Supabase Storage
+    const { error: uploadError } = await supabase.storage
       .from(process.env.SUPABASE_BUCKET)
       .upload(pathStorage, req.file.buffer, {
         contentType: req.file.mimetype,
@@ -475,20 +557,29 @@ exports.agregarEvidencia = async (req, res) => {
       });
 
     if (uploadError) {
-      console.error('Error Supabase:', uploadError);
-      return res.status(500).json({ message: 'Error al subir archivo a Supabase', detalle: uploadError.message });
+      console.error("Error Supabase:", uploadError);
+      pathStorage = null; // no hay nada que limpiar
+      return res.status(500).json({
+        message: "Error al subir archivo a Supabase",
+        detalle: uploadError.message
+      });
     }
 
-    // 5. Obtener URL pública (requiere bucket público)
+    // 8. Obtener URL pública
     const { data: urlData } = supabase.storage
       .from(process.env.SUPABASE_BUCKET)
       .getPublicUrl(pathStorage);
 
-      console.log('🔗 urlData:', urlData);   // 👈 TEMPORAL
-      console.log('🔗 publicUrl:', urlData?.publicUrl); 
+    const urlPublica = urlData?.publicUrl;
+    if (!urlPublica) {
+      await supabase.storage.from(process.env.SUPABASE_BUCKET).remove([pathStorage]);
+      pathStorage = null;
+      return res.status(500).json({
+        message: "No se pudo obtener la URL pública del archivo"
+      });
+    }
 
-    const urlPublica = urlData.publicUrl;
-    // 6. Guardar metadata en MongoDB (mismo esquema que ya tienes)
+    // 9. Guardar metadata en Mongo (nombres alineados al JSON Schema)
     incidencia.evidencias_adjuntas.push({
       nombre_archivo: req.file.originalname,
       tipo_mime: req.file.mimetype,
@@ -497,23 +588,49 @@ exports.agregarEvidencia = async (req, res) => {
       fecha_carga: new Date()
     });
 
+    // 10. Historial con objeto normalizado (consistente con crearIncidencia)
     registrarHistorial(
-      incidencia, req.user, 'documentacion', incidencia.estado,
+      incidencia,
+      { sub: req.user.sub, nombre: req.user.nombre },
+      "evidencia_adjuntada",
+      incidencia.estado,
       `Se adjuntó evidencia: ${req.file.originalname}`
     );
 
     await incidencia.save();
 
-    return res.json({
-      message: 'Evidencia agregada',
-      evidencia: incidencia.evidencias_adjuntas[incidencia.evidencias_adjuntas.length - 1]
+    // 11. Éxito
+    return res.status(201).json({
+      message: "Evidencia agregada",
+      evidencia:
+        incidencia.evidencias_adjuntas[incidencia.evidencias_adjuntas.length - 1]
     });
   } catch (error) {
+    // 12. Limpieza: si subimos el archivo y algo falló después, borrarlo
+    if (pathStorage) {
+      try {
+        await supabase.storage.from(process.env.SUPABASE_BUCKET).remove([pathStorage]);
+      } catch (cleanupErr) {
+        console.error("No se pudo limpiar archivo huérfano:", cleanupErr);
+      }
+    }
+
+    if (error.name === "ValidationError") {
+      return res.status(400).json({
+        message: "Datos inválidos",
+        errores: Object.fromEntries(
+          Object.entries(error.errors).map(([k, v]) => [k, v.message])
+        )
+      });
+    }
+
     console.error(error);
-    return res.status(500).json({ message: 'Error al agregar evidencia', detalle: error.message });
+    return res.status(500).json({
+      message: "Error al agregar evidencia",
+      detalle: error.message
+    });
   }
 };
-
 /* -------------------------------------------------------------
  * POST /api/incidencias/:id/comentario
  *  todos los involucrados pueden comentar (reportante dueño / técnico asignado / coordinador)
